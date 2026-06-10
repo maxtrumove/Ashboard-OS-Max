@@ -1,0 +1,45 @@
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/db";
+
+function safeParse(value: string): Record<string, unknown> {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+// Strip secret-bearing fields (request headers) before returning config to the client.
+function publicConfig(kind: string, config: Record<string, unknown>): Record<string, unknown> {
+  if (kind === "http" || kind === "mcp") {
+    const { headers, ...rest } = config;
+    return { ...rest, hasHeaders: !!headers };
+  }
+  return config;
+}
+
+export async function GET() {
+  const defs = await prisma.connectorDef.findMany({ orderBy: { createdAt: "desc" } });
+  return NextResponse.json(
+    defs.map((d) => ({ id: d.id, name: d.name, kind: d.kind, config: publicConfig(d.kind, safeParse(d.config)) })),
+  );
+}
+
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({}));
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : "Untitled connector";
+  const kind = ["http", "mcp", "builtin"].includes(body.kind) ? body.kind : "builtin";
+  const config = body.config && typeof body.config === "object" ? body.config : {};
+  const def = await prisma.connectorDef.create({
+    data: { name, kind, config: JSON.stringify(config) },
+  });
+  return NextResponse.json({ id: def.id, name: def.name, kind: def.kind }, { status: 201 });
+}
+
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  await prisma.connectorDef.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}
